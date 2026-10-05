@@ -1,0 +1,249 @@
+{
+  "title": "EGTS Telematics Platform",
+  "uid": "egts-main",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["egts", "telematics"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 8000 },
+              { "color": "red", "value": 15000 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "prometheus" },
+        "expr": "egts_active_connections",
+        "legendFormat": "connections"
+      }]
+    },
+    {
+      "id": 2,
+      "title": "Packets / sec",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 800 },
+              { "color": "red", "value": 1200 }
+            ]
+          },
+          "unit": "ops"
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "prometheus" },
+        "expr": "rate(egts_packets_total[1m])",
+        "legendFormat": "pkt/s"
+      }]
+    },
+    {
+      "id": 3,
+      "title": "Parse Errors / sec",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "ops"
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "prometheus" },
+        "expr": "rate(egts_parse_errors_total[1m])",
+        "legendFormat": "errors/s"
+      }]
+    },
+    {
+      "id": 4,
+      "title": "Kafka Produced / sec",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      },
+      "targets": [{
+        "datasource": { "uid": "prometheus" },
+        "expr": "sum(rate(egts_kafka_produced_total[1m]))",
+        "legendFormat": "msg/s"
+      }]
+    },
+    {
+      "id": 5,
+      "title": "Active Devices (last 5 min)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "targets": [{
+        "datasource": { "uid": "timescaledb" },
+        "rawSql": "SELECT now() AS time, COUNT(DISTINCT device_id) AS value FROM positions WHERE time > now() - INTERVAL '5 minutes'",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 6,
+      "title": "Packets Received",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "fillOpacity": 10 }
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "prometheus" },
+        "expr": "rate(egts_packets_total[1m])",
+        "legendFormat": "{{type}}"
+      }]
+    },
+    {
+      "id": 7,
+      "title": "Kafka Produced by Topic",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "fillOpacity": 10 }
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "prometheus" },
+        "expr": "rate(egts_kafka_produced_total[1m])",
+        "legendFormat": "{{topic}}"
+      }]
+    },
+    {
+      "id": 8,
+      "title": "Vehicle Positions (last known)",
+      "type": "geomap",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 12 },
+      "options": {
+        "basemap": { "type": "default" },
+        "layers": [{
+          "type": "markers",
+          "config": {
+            "size": { "fixed": 5 },
+            "color": { "fixed": "blue" },
+            "fillOpacity": 0.8
+          }
+        }],
+        "view": { "lat": 55.75, "lon": 37.62, "zoom": 9 }
+      },
+      "fieldConfig": {
+        "defaults": { "mappings": [] }
+      },
+      "targets": [{
+        "datasource": { "uid": "timescaledb" },
+        "rawSql": "SELECT device_id AS metric, last_lat AS latitude, last_lon AS longitude, last_speed AS speed FROM devices WHERE last_seen > now() - INTERVAL '10 minutes'",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 9,
+      "title": "Positions per minute",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "targets": [{
+        "datasource": { "uid": "timescaledb" },
+        "rawSql": "SELECT time_bucket('1 minute', time) AS time, count(*) AS value FROM positions WHERE $__timeFilter(time) GROUP BY 1 ORDER BY 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 10,
+      "title": "Average Speed (km/h) by minute",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "velocitykmh" }
+      },
+      "targets": [{
+        "datasource": { "uid": "timescaledb" },
+        "rawSql": "SELECT time_bucket('1 minute', time) AS time, round(avg(speed)::numeric, 1) AS avg_speed FROM positions WHERE $__timeFilter(time) AND speed > 0 GROUP BY 1 ORDER BY 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 11,
+      "title": "iBeacon Events",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "targets": [{
+        "datasource": { "uid": "timescaledb" },
+        "rawSql": "SELECT time_bucket('1 minute', time) AS time, count(*) FILTER (WHERE event_type=1) AS enters, count(*) FILTER (WHERE event_type=2) AS exits FROM events_ibeacon WHERE $__timeFilter(time) GROUP BY 1 ORDER BY 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 12,
+      "title": "LTE / GSM Cell Distribution",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+      "options": { "pieType": "donut" },
+      "targets": [{
+        "datasource": { "uid": "timescaledb" },
+        "rawSql": "SELECT CASE rat WHEN 1 THEN 'GSM' WHEN 2 THEN 'UMTS' WHEN 3 THEN 'LTE' WHEN 4 THEN 'NR' ELSE 'Unknown' END AS metric, count(*) AS value FROM events_cell WHERE $__timeFilter(time) GROUP BY rat ORDER BY rat",
+        "format": "table"
+      }]
+    }
+  ]
+}

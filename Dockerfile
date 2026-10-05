@@ -1,4 +1,3 @@
-# ── Build stage ─────────────────────────────────────────────────────────────
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /src
@@ -8,11 +7,9 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /egts-server ./cmd/server
 
-# ── Runtime stage ────────────────────────────────────────────────────────────
-FROM scratch
+FROM gcr.io/distroless/static-debian12
 
 COPY --from=builder /egts-server /egts-server
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 EXPOSE 5555 9090
 

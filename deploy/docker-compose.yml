@@ -1,37 +1,107 @@
 version: "3.9"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EGTS Telematics Platform
+#
+#  Usage:
+#    cd deploy && docker-compose up -d
+#
+#  Ports:
+#    5555  — EGTS TCP (devices connect here)
+#    8080  — Kafka UI
+#    3000  — Grafana  (admin / admin)
+#    9091  — Prometheus
+#    5432  — TimescaleDB (external, for dev tools)
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "3"
+
 services:
-  # ── Kafka (KRaft, no Zookeeper) ─────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STORAGE
+# ══════════════════════════════════════════════════════════════════════════════
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    <<: [*restart, *logging]
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-egts}
+      POSTGRES_USER:     ${POSTGRES_USER:-egts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-egts}
+      # Tune for ~16 GB RAM; adjust for your machine
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    command: >
+      postgres
+        -c shared_buffers=512MB
+        -c effective_cache_size=1536MB
+        -c work_mem=16MB
+        -c maintenance_work_mem=128MB
+        -c max_connections=200
+        -c wal_level=replica
+        -c max_wal_size=2GB
+        -c checkpoint_completion_target=0.9
+        -c timescaledb.max_background_workers=8
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-egts} -d ${POSTGRES_DB:-egts}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MESSAGE BROKER
+# ══════════════════════════════════════════════════════════════════════════════
+
   kafka:
     image: confluentinc/cp-kafka:7.7.0
+    <<: [*restart, *logging]
     hostname: kafka
     ports:
       - "9092:9092"
-      - "9093:9093"
     environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_NODE_ID:                        1
+      KAFKA_PROCESS_ROLES:                  broker,controller
+      KAFKA_LISTENERS:                      PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS:           PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS:       1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES:      CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME:     PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-      CLUSTER_ID: "egts-cluster-001"
-      # Retention: 7 days, 10 GB per topic
-      KAFKA_LOG_RETENTION_HOURS: 168
-      KAFKA_LOG_SEGMENT_BYTES: 1073741824
-      KAFKA_LOG_RETENTION_BYTES: 10737418240
+      KAFKA_LOG_DIRS:                       /var/lib/kafka/data
+      CLUSTER_ID:                           ${KAFKA_CLUSTER_ID:-egts-cluster-001}
+      # Tuning for 1000 msg/s with 10k partitions
+      KAFKA_NUM_IO_THREADS:                 8
+      KAFKA_NUM_NETWORK_THREADS:            5
+      KAFKA_SOCKET_SEND_BUFFER_BYTES:       102400
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES:    102400
+      KAFKA_SOCKET_REQUEST_MAX_BYTES:       104857600
+      # Retention
+      KAFKA_LOG_RETENTION_HOURS:            168
+      KAFKA_LOG_RETENTION_BYTES:            10737418240
+      KAFKA_LOG_SEGMENT_BYTES:              536870912
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 15
+      start_period: 30s
 
-  # ── Kafka topic init ─────────────────────────────────────────────────────────
   kafka-init:
     image: confluentinc/cp-kafka:7.7.0
     depends_on:
@@ -40,58 +110,161 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command: |
       "
+      # Raw packets — all subrecord types, 12 partitions (device_id % 12)
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
         --topic egts.raw --partitions 12 --replication-factor 1 \
-        --config retention.ms=604800000
+        --config retention.ms=604800000 --config compression.type=lz4
+
+      # Positions only — high-throughput topic
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
         --topic egts.positions --partitions 12 --replication-factor 1 \
-        --config retention.ms=604800000
+        --config retention.ms=604800000 --config compression.type=lz4
+
+      # Extension events (iBeacon, LBS, WiFi, RFID)
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
         --topic egts.events --partitions 6 --replication-factor 1 \
-        --config retention.ms=2592000000
-      echo 'Topics created.'
-      "
+        --config retention.ms=2592000000 --config compression.type=lz4
 
-  # ── EGTS server ──────────────────────────────────────────────────────────────
+      # Dead-letter queue for unparseable packets
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic egts.dlq --partitions 1 --replication-factor 1 \
+        --config retention.ms=604800000
+
+      echo '✓ Kafka topics created'
+      kafka-topics --bootstrap-server kafka:9092 --list
+      "
+    restart: "no"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# APPLICATION
+# ══════════════════════════════════════════════════════════════════════════════
+
   egts-server:
     build:
       context: ..
       dockerfile: Dockerfile
+    <<: [*restart, *logging]
     ports:
-      - "5555:5555"   # devices connect here
-      - "9090:9090"   # Prometheus metrics
+      - "5555:5555"             # EGTS TCP — devices connect here
+      - "9090:9090"             # Prometheus metrics
     environment:
-      EGTS_ADDR: ":5555"
-      EGTS_METRICS_ADDR: ":9090"
-      KAFKA_BROKERS: "kafka:9092"
+      EGTS_ADDR:         ${EGTS_ADDR:-:5555}
+      EGTS_METRICS_ADDR: ${EGTS_METRICS_ADDR:-:9090}
+      EGTS_MAX_CONN:     ${EGTS_MAX_CONN:-20000}
+      KAFKA_BROKERS:     kafka:9092
+      KAFKA_TOPIC_RAW:   egts.raw
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-  # ── Prometheus ───────────────────────────────────────────────────────────────
+  consumer:
+    build:
+      context: ..
+      dockerfile: Dockerfile.consumer
+    <<: [*restart, *logging]
+    environment:
+      KAFKA_BROKERS:  kafka:9092
+      DATABASE_URL:   postgres://${POSTGRES_USER:-egts}:${POSTGRES_PASSWORD:-egts}@timescaledb:5432/${POSTGRES_DB:-egts}?sslmode=disable
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+    deploy:
+      replicas: 2              # 2 consumer replicas share partitions via consumer group
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OBSERVABILITY
+# ══════════════════════════════════════════════════════════════════════════════
+
   prometheus:
     image: prom/prometheus:v2.54.0
+    <<: [*restart, *logging]
     ports:
       - "9091:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-  # ── Kafka UI (for local dev) ─────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.2.0
+    <<: [*restart, *logging]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER:       ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD:   ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED:    "false"
+      GF_INSTALL_PLUGINS:           "grafana-worldmap-panel"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/egts.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - timescaledb
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
+    <<: [*restart, *logging]
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_NAME:              local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS:  kafka:9092
+      AUTH_TYPE:                          "LOGIN_FORM"
+      SPRING_SECURITY_USER_NAME:          admin
+      SPRING_SECURITY_USER_PASSWORD:      admin
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VOLUMES
+# ══════════════════════════════════════════════════════════════════════════════
 
 volumes:
+  timescaledb_data:
+    driver: local
   kafka_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NETWORKS  (все сервисы в одной сети — явно для наглядности)
+# ══════════════════════════════════════════════════════════════════════════════
+
+networks:
+  default:
+    name: egts-platform
+    driver: bridge

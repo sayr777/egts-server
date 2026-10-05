@@ -1,7 +1,23 @@
 global:
-  scrape_interval: 15s
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
 
 scrape_configs:
   - job_name: egts-server
     static_configs:
       - targets: ["egts-server:9090"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        regex: '([^:]+).*'
+        replacement: '${1}'
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka:9092"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

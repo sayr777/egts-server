@@ -1,0 +1,97 @@
+version: "3.9"
+
+services:
+  # ── Kafka (KRaft, no Zookeeper) ─────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.7.0
+    hostname: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: "egts-cluster-001"
+      # Retention: 7 days, 10 GB per topic
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_BYTES: 10737418240
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Kafka topic init ─────────────────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic egts.raw --partitions 12 --replication-factor 1 \
+        --config retention.ms=604800000
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic egts.positions --partitions 12 --replication-factor 1 \
+        --config retention.ms=604800000
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
+        --topic egts.events --partitions 6 --replication-factor 1 \
+        --config retention.ms=2592000000
+      echo 'Topics created.'
+      "
+
+  # ── EGTS server ──────────────────────────────────────────────────────────────
+  egts-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"   # devices connect here
+      - "9090:9090"   # Prometheus metrics
+    environment:
+      EGTS_ADDR: ":5555"
+      EGTS_METRICS_ADDR: ":9090"
+      KAFKA_BROKERS: "kafka:9092"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Prometheus ───────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+
+  # ── Kafka UI (for local dev) ─────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      - kafka
+
+volumes:
+  kafka_data:

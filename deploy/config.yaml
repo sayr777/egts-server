@@ -1,0 +1,16 @@
+server:
+  addr: ":5555"
+  read_timeout: 90s
+  write_timeout: 5s
+  max_connections: 20000
+  metrics_addr: ":9090"
+
+kafka:
+  brokers:
+    - "kafka:9092"
+  topic_raw: "egts.raw"
+  topic_positions: "egts.positions"
+  topic_events: "egts.events"
+  batch_size: 100
+  batch_timeout: 10ms
+  async: true

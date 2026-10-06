@@ -14,10 +14,6 @@ scrape_configs:
         regex: '([^:]+).*'
         replacement: '${1}'
 
-  - job_name: kafka
-    static_configs:
-      - targets: ["kafka:9092"]
-
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]

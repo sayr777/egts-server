@@ -114,26 +114,20 @@ services:
       kafka:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
-    command: |
-      "
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
-        --topic egts.raw --partitions 12 --replication-factor 1 \
-        --config retention.ms=604800000 --config compression.type=lz4
-
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
-        --topic egts.positions --partitions 12 --replication-factor 1 \
-        --config retention.ms=604800000 --config compression.type=lz4
-
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
-        --topic egts.events --partitions 6 --replication-factor 1 \
-        --config retention.ms=2592000000 --config compression.type=lz4
-
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \
-        --topic egts.dlq --partitions 1 --replication-factor 1 \
-        --config retention.ms=604800000
-
+    command: >-
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic egts.raw --partitions 12 --replication-factor 1
+        --config retention.ms=604800000 --config compression.type=lz4 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic egts.positions --partitions 12 --replication-factor 1
+        --config retention.ms=604800000 --config compression.type=lz4 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic egts.events --partitions 6 --replication-factor 1
+        --config retention.ms=2592000000 --config compression.type=lz4 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic egts.dlq --partitions 1 --replication-factor 1
+        --config retention.ms=604800000 &&
       echo 'Kafka topics created'
-      "
     restart: "no"
 
 
@@ -154,14 +148,11 @@ services:
       EGTS_METRICS_ADDR: ${EGTS_METRICS_ADDR:-:9090}
       EGTS_MAX_CONN:     ${EGTS_MAX_CONN:-20000}
       KAFKA_BROKERS:     kafka:9092
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/metrics | head -1 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
 
   consumer:
     build:

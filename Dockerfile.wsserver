@@ -5,7 +5,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /wsserver ./cmd/wsserver
 
-FROM scratch
+FROM alpine:3.21
+RUN apk add --no-cache wget ca-certificates
 COPY --from=build /wsserver /wsserver
 EXPOSE 8081
 ENTRYPOINT ["/wsserver"]
